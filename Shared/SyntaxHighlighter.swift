@@ -34,228 +34,420 @@ enum SyntaxHighlighter {
 
     // MARK: - Mobileconfig Renderer
 
+    private static let payloadMetaKeys: Set<String> = [
+        "PayloadType", "PayloadVersion", "PayloadUUID", "PayloadIdentifier",
+        "PayloadDisplayName", "PayloadDescription",
+        "PayloadOrganization", "PayloadScope", "PayloadRemovalDisallowed",
+        "PayloadEnabled"
+    ]
+
+    /// Extract effective settings, flattening ManagedClient.preferences nesting
+    private static func extractSettings(_ payload: [String: Any]) -> [String: Any] {
+        let type = payload["PayloadType"] as? String ?? ""
+        if type == "com.apple.ManagedClient.preferences",
+           let content = payload["PayloadContent"] as? [String: Any] {
+            for (_, domainVal) in content {
+                if let domain = domainVal as? [String: Any],
+                   let forced = domain["Forced"] as? [[String: Any]],
+                   let first = forced.first,
+                   let mcx = first["mcx_preference_settings"] as? [String: Any] {
+                    return mcx
+                }
+            }
+            return content
+        }
+        return payload.filter { !payloadMetaKeys.contains($0.key) && $0.key != "PayloadContent" }
+    }
+
+    /// Check if a value is simple (renders inline) vs complex (needs its own block)
+    private static func isSimple(_ value: Any) -> Bool {
+        switch value {
+        case is Bool, is NSNumber: return true
+        case let s as String: return s.count < 120
+        case let a as [Any]: return a.isEmpty
+        case let d as [String: Any]: return d.isEmpty
+        default: return true
+        }
+    }
+
+    /// Check if a string value is "long" (should span full width)
+    private static func isLongString(_ value: Any) -> Bool {
+        if let s = value as? String { return s.count > 60 }
+        return false
+    }
+
+    // MARK: - Mobileconfig Renderer (HIG-style inset grouped)
+
+    // Tailwind-inspired design tokens
+    private static let pad = 16
+    private static let groupBg = "#f8fafc"   // slate-50
+    private static let cellBg = "#ffffff"
+    private static let sepColor = "#e2e8f0"  // slate-200 (light, crisp)
+    private static let keyColor = "#334155"   // slate-700
+    private static let labelColor = "#64748b" // slate-500
+    private static let mutedColor = "#94a3b8"  // slate-400
+    private static let accentColor = "#6366f1" // indigo-500
+
     private static func renderMobileconfig(_ data: Data) -> String? {
-        guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+        guard let rawXML = String(data: data, encoding: .utf8),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
             return nil
         }
 
-        var html = ""
+        var h = ""  // html accumulator
 
-        // Profile header
         let displayName = plist["PayloadDisplayName"] as? String ?? "Untitled Profile"
         let identifier = plist["PayloadIdentifier"] as? String ?? ""
+        let org = plist["PayloadOrganization"] as? String
+        let desc = plist["PayloadDescription"] as? String
+        let scope = plist["PayloadScope"] as? String
         let payloads = plist["PayloadContent"] as? [[String: Any]] ?? []
-
-        // Collect actual payload types (the useful info)
         let payloadTypes = payloads.compactMap { $0["PayloadType"] as? String }
 
-        html += "<div class=\"profile-header\">"
-        html += "<div class=\"profile-name\">\(escapeHTML(displayName))</div>"
-        if !identifier.isEmpty {
-            html += "<div class=\"profile-id\">\(escapeHTML(identifier))</div>"
+        // ── Profile Header ──
+        let scopeText: String
+        let scopeColor: String
+        switch scope {
+        case "System": scopeText = "Device Profile"; scopeColor = "#ea580c"  // orange-600
+        case "User":   scopeText = "User Profile";   scopeColor = "#2563eb"  // blue-600
+        default:       scopeText = "Profile";         scopeColor = mutedColor
         }
+
+        h += "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" bgcolor=\"\(cellBg)\"><tr><td style=\"padding: 20px \(pad)px 16px \(pad)px;\">"
+        h += "<font color=\"\(scopeColor)\" size=\"1\"><b>\(scopeText.uppercased())</b></font><br>"
+        h += "<font size=\"5\" face=\"-apple-system, Helvetica\" color=\"#0f172a\"><b>\(esc(displayName))</b></font>"
+        if let org = org { h += "<br><font size=\"2\" color=\"\(labelColor)\">\(esc(org))</font>" }
+        h += "<br><font size=\"1\" face=\"Menlo\" color=\"\(mutedColor)\">\(esc(identifier))</font>"
+        if let desc = desc, !desc.isEmpty {
+            h += "<br><font size=\"2\" color=\"\(labelColor)\">\(esc(desc))</font>"
+        }
+
+        // Payload type badges inline
         if !payloadTypes.isEmpty {
-            html += "<div class=\"profile-meta\">"
+            h += "<br><br>"
             for pt in payloadTypes {
-                html += "<span class=\"badge\">\(escapeHTML(pt))</span>"
+                let short = pt.split(separator: ".").last.map(String.init) ?? pt
+                h += "<font size=\"1\" face=\"Menlo\" color=\"\(accentColor)\"><b>\(esc(short))</b></font>"
+                h += "<font color=\"\(mutedColor)\"> &middot; </font>"
             }
-            html += "</div>"
-        }
-        html += "</div>"
-
-        // Top-level settings (excluding payload metadata and PayloadContent)
-        let metaKeys: Set = ["PayloadType", "PayloadVersion", "PayloadUUID", "PayloadIdentifier",
-                             "PayloadDisplayName", "PayloadContent", "PayloadDescription",
-                             "PayloadOrganization", "PayloadScope", "PayloadRemovalDisallowed"]
-        let topSettings = plist.filter { !metaKeys.contains($0.key) }
-        if !topSettings.isEmpty {
-            html += renderSettingsTable(topSettings, title: nil)
         }
 
-        // Payload content
-        for payload in payloads {
+        h += "</td></tr></table>"
+
+        // ── Payload Sections ──
+        for (idx, payload) in payloads.enumerated() {
             let name = payload["PayloadDisplayName"] as? String
-                ?? payload["PayloadType"] as? String
-                ?? "Payload"
+                ?? payload["PayloadType"] as? String ?? "Payload"
             let type = payload["PayloadType"] as? String ?? ""
+            let payloadDesc = payload["PayloadDescription"] as? String
 
-            html += "<div class=\"payload-section\">"
-            html += "<div class=\"payload-header\">"
-            html += "<div class=\"payload-name\">\(escapeHTML(name))</div>"
-            if !type.isEmpty {
-                html += "<div class=\"payload-type\">\(escapeHTML(type))</div>"
+            // Payload header bar
+            h += "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">"
+            h += "<tr><td colspan=\"2\" style=\"padding: 28px \(pad)px 0 \(pad)px;\"><table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr><td bgcolor=\"\(sepColor)\" style=\"font-size:1px; line-height:1px; height:1px;\">&nbsp;</td></tr></table></td></tr>"
+            h += "<tr><td style=\"padding: 12px \(pad)px 4px \(pad)px;\">"
+            h += "<font size=\"1\" color=\"\(mutedColor)\"><b>PAYLOAD \(idx + 1)</b></font><br>"
+            h += "<font size=\"3\" face=\"-apple-system, Helvetica\" color=\"#1e293b\"><b>\(esc(name))</b></font>"
+            if !type.isEmpty && type != name {
+                h += "<br><font size=\"1\" face=\"Menlo\" color=\"\(mutedColor)\">\(esc(type))</font>"
             }
-            html += "</div>"
+            if let d = payloadDesc, !d.isEmpty {
+                h += "<br><font size=\"2\" color=\"\(labelColor)\">\(esc(d))</font>"
+            }
+            h += "</td></tr></table>"
 
-            let settings = payload.filter { !metaKeys.contains($0.key) }
-            if !settings.isEmpty {
-                html += renderSettingsTable(settings, title: nil)
+            let settings = extractSettings(payload)
+            guard !settings.isEmpty else { continue }
+
+            // Split simple vs complex
+            let sorted = settings.keys.sorted()
+            let simpleKeys = sorted.filter { isSimple(settings[$0]!) }
+            let complexKeys = sorted.filter { !isSimple(settings[$0]!) }
+
+            // ── Simple settings group (HIG inset grouped table) ──
+            if !simpleKeys.isEmpty {
+                h += groupStart()
+                for (i, key) in simpleKeys.enumerated() {
+                    h += cellRow(key, inlineValue(settings[key]!, key: key), last: i == simpleKeys.count - 1)
+                }
+                h += groupEnd()
             }
-            html += "</div>"
+
+            // ── Complex settings: each gets its own group ──
+            for key in complexKeys {
+                h += sectionHeader(key)
+                h += renderComplexValue(settings[key]!)
+            }
         }
 
-        return wrapMobileconfigHTML(html, rawXML: String(data: data, encoding: .utf8) ?? "")
+        // ── XML Source ──
+        h += "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">"
+        h += "<tr><td style=\"padding: 28px \(pad)px 0 \(pad)px;\"><table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr><td bgcolor=\"\(sepColor)\" style=\"font-size:1px; line-height:1px; height:1px;\">&nbsp;</td></tr></table></td></tr>"
+        h += "<tr><td style=\"padding: 8px \(pad)px 6px \(pad)px;\">"
+        h += "<font size=\"1\" color=\"\(mutedColor)\"><b>XML SOURCE</b></font>"
+        h += "</td></tr></table>"
+
+        h += "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr><td bgcolor=\"\(cellBg)\" style=\"padding: 12px \(pad)px;\">"
+        let xmlTokens = tokenizeXML(rawXML)
+        h += "<pre style=\"font: 11px/1.6 Menlo, monospace; margin: 0; white-space: pre-wrap; word-wrap: break-word; color: \(keyColor);\">\(renderTokens(xmlTokens))</pre>"
+        h += "</td></tr></table>"
+
+        return wrapMobileconfigHTML(h)
     }
 
-    private static func renderSettingsTable(_ settings: [String: Any], title: String?) -> String {
-        var html = ""
-        if let title = title {
-            html += "<div class=\"section-title\">\(escapeHTML(title))</div>"
-        }
-        html += "<table>"
-        for key in settings.keys.sorted() {
-            let value = settings[key]!
-            html += "<tr>"
-            html += "<td class=\"setting-key\">\(escapeHTML(key))</td>"
-            html += "<td class=\"setting-value\">\(renderValue(value))</td>"
-            html += "</tr>"
-        }
-        html += "</table>"
-        return html
+    // MARK: - HIG Table Building Blocks
+
+    /// Section header: uppercase label above a group
+    private static func sectionHeader(_ title: String) -> String {
+        "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr><td style=\"padding: 16px \(pad)px 6px \(pad)px;\">" +
+        "<font size=\"1\" color=\"\(labelColor)\"><b>\(esc(title).uppercased())</b></font>" +
+        "</td></tr></table>"
     }
 
-    private static func renderValue(_ value: Any, depth: Int = 0) -> String {
+    /// Start a white inset group
+    private static func groupStart() -> String {
+        "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" bgcolor=\"\(cellBg)\">"
+    }
+
+    /// End a group
+    private static func groupEnd() -> String { "</table>" }
+
+    /// Thin 1px separator row (no <hr> — NSAttributedString renders those as fat bars)
+    private static func thinSep() -> String {
+        "<tr><td colspan=\"2\" style=\"padding: 0 0 0 \(pad)px;\"><table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr><td bgcolor=\"\(sepColor)\" style=\"font-size:1px; line-height:1px; height:1px;\">&nbsp;</td></tr></table></td></tr>"
+    }
+
+    /// Inline 1px separator (for use inside an existing <td>)
+    private static func thinSepInline() -> String {
+        "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr><td bgcolor=\"\(sepColor)\" style=\"font-size:1px; line-height:1px; height:1px;\">&nbsp;</td></tr></table>"
+    }
+
+    /// A single cell row: key on left, value on right, with bottom separator unless last
+    private static func cellRow(_ key: String, _ value: String, last: Bool = false) -> String {
+        var r = "<tr bgcolor=\"\(cellBg)\"><td valign=\"top\" style=\"padding: 9px \(pad)px; width: 38%;\">"
+        r += "<font size=\"2\" color=\"\(keyColor)\">\(esc(key))</font></td>"
+        r += "<td valign=\"top\" style=\"padding: 9px \(pad)px;\">\(value)</td></tr>"
+        if !last { r += thinSep() }
+        return r
+    }
+
+    /// Keys whose integer values represent hours
+    private static let hourKeys: Set<String> = [
+        "gracePeriodInstallDelay", "gracePeriodLaunchDelay"
+    ]
+
+    /// Heuristic: does this key name suggest a time/duration value?
+    private static func isTimeKey(_ key: String) -> Bool {
+        let lower = key.lowercased()
+        let timeWords = ["time", "cycle", "delay", "interval", "timeout", "duration", "period", "refresh", "expir"]
+        return timeWords.contains { lower.contains($0) }
+    }
+
+    /// Format seconds into "Xd Xh Xm Xs"
+    private static func formatDuration(seconds: Int) -> String {
+        if seconds == 0 { return "0s" }
+        let d = seconds / 86400
+        let h = (seconds % 86400) / 3600
+        let m = (seconds % 3600) / 60
+        let s = seconds % 60
+        var parts: [String] = []
+        if d > 0 { parts.append("\(d)d") }
+        if h > 0 { parts.append("\(h)h") }
+        if m > 0 { parts.append("\(m)m") }
+        if s > 0 { parts.append("\(s)s") }
+        return parts.joined(separator: " ")
+    }
+
+    /// Format hours into "Xd Xh"
+    private static func formatHours(_ hours: Int) -> String {
+        if hours == 0 { return "0h" }
+        let d = hours / 24
+        let h = hours % 24
+        var parts: [String] = []
+        if d > 0 { parts.append("\(d)d") }
+        if h > 0 { parts.append("\(h)h") }
+        return parts.joined(separator: " ")
+    }
+
+    /// Render a simple/inline value, optionally with time annotation for known keys
+    private static func inlineValue(_ value: Any, key: String? = nil) -> String {
         switch value {
         case let bool as Bool:
-            return "<span class=\"val-bool\">\(bool ? "true" : "false")</span>"
+            let color = bool ? "#059669" : "#dc2626"  // emerald-600 / red-600
+            return "<font size=\"2\" color=\"\(color)\"><b>\(bool ? "Yes" : "No")</b></font>"
         case let num as NSNumber:
-            return "<span class=\"val-num\">\(num)</span>"
-        case let str as String:
-            return "<span class=\"val-str\">\(escapeHTML(str))</span>"
-        case let arr as [Any]:
-            if arr.isEmpty { return "<span class=\"val-empty\">[ ]</span>" }
-            let items = arr.map { "<li>\(renderValue($0, depth: depth + 1))</li>" }.joined()
-            return "<ul>\(items)</ul>"
-        case let dict as [String: Any]:
-            if dict.isEmpty { return "<span class=\"val-empty\">{ }</span>" }
-            var html = "<table class=\"nested\">"
-            for key in dict.keys.sorted() {
-                html += "<tr><td class=\"setting-key\">\(escapeHTML(key))</td>"
-                html += "<td class=\"setting-value\">\(renderValue(dict[key]!, depth: depth + 1))</td></tr>"
+            var result = "<font size=\"2\" color=\"\(accentColor)\"><b>\(num)</b></font>"
+            if let key = key, num.intValue > 0 {
+                if hourKeys.contains(key) {
+                    result += " <font size=\"1\" color=\"\(mutedColor)\">(\(formatHours(num.intValue)))</font>"
+                } else if isTimeKey(key) {
+                    result += " <font size=\"1\" color=\"\(mutedColor)\">(\(formatDuration(seconds: num.intValue)))</font>"
+                }
             }
-            html += "</table>"
-            return html
-        case let data as Data:
-            return "<span class=\"val-str\">\(data.count) bytes</span>"
+            return result
+        case let str as String where str.isEmpty:
+            return "<font size=\"2\" color=\"\(mutedColor)\"><i>—</i></font>"
+        case let str as String:
+            return "<font size=\"2\" color=\"#1e293b\">\(esc(str))</font>"  // slate-800
         default:
-            return "<span class=\"val-str\">\(escapeHTML(String(describing: value)))</span>"
+            return "<font size=\"2\" color=\"#1e293b\">\(esc(String(describing: value)))</font>"
         }
     }
 
-    private static func wrapMobileconfigHTML(_ body: String, rawXML: String) -> String {
-        let xmlTokens = tokenizeXML(rawXML)
-        let highlightedXML = renderTokens(xmlTokens)
-        return """
+    /// Render a complex value (dict, array of dicts) as its own group(s)
+    private static func renderComplexValue(_ value: Any) -> String {
+        var h = ""
+        switch value {
+        case let arr as [[String: Any]]:
+            // Array of dicts: each dict is a numbered group
+            for (i, dict) in arr.enumerated() {
+                let label = dict["_language"] as? String
+                    ?? dict["identifier"] as? String
+                    ?? dict["BundleIdentifier"] as? String
+                    ?? dict["Identifier"] as? String
+                    ?? dict["RuleValue"] as? String
+                    ?? nil
+                if let label = label {
+                    h += "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr><td style=\"padding: 10px \(pad)px 4px \(pad)px;\">"
+                    h += "<font size=\"1\" color=\"\(labelColor)\">\(esc(label))</font>"
+                    h += "</td></tr></table>"
+                } else if arr.count > 1 {
+                    h += "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr><td style=\"padding: 10px \(pad)px 4px \(pad)px;\">"
+                    h += "<font size=\"1\" color=\"\(labelColor)\">Item \(i + 1)</font>"
+                    h += "</td></tr></table>"
+                }
+                h += groupStart()
+                let keys = dict.keys.sorted()
+                for (j, key) in keys.enumerated() {
+                    let val = dict[key]!
+                    let isLast = j == keys.count - 1
+                    if isSimple(val) && !isLongString(val) {
+                        h += cellRow(key, inlineValue(val, key: key), last: isLast)
+                    } else if isLongString(val) {
+                        // Long string: key and value stacked full-width
+                        h += "<tr bgcolor=\"\(cellBg)\"><td colspan=\"2\" style=\"padding: 9px \(pad)px 3px \(pad)px;\">"
+                        h += "<font size=\"2\" color=\"\(keyColor)\">\(esc(key))</font></td></tr>"
+                        h += "<tr bgcolor=\"\(cellBg)\"><td colspan=\"2\" style=\"padding: 0 \(pad)px 9px \(pad)px;\">"
+                        h += "<font size=\"1\" face=\"Menlo\" color=\"\(labelColor)\">\(esc(val as! String))</font></td></tr>"
+                        if !isLast {
+                            h += "<tr><td colspan=\"2\" style=\"padding: 0 0 0 \(pad)px;\">\(thinSepInline())</td></tr>"
+                        }
+                    } else {
+                        // Complex nested value: key as label, value indented below
+                        h += "<tr bgcolor=\"\(cellBg)\"><td colspan=\"2\" valign=\"top\" style=\"padding: 9px \(pad)px 3px \(pad)px;\">"
+                        h += "<font size=\"2\" color=\"\(keyColor)\">\(esc(key))</font></td></tr>"
+                        h += "<tr bgcolor=\"\(cellBg)\"><td colspan=\"2\" style=\"padding: 0 \(pad)px 9px \(pad + 8)px;\">"
+                        h += renderNestedBlock(val)
+                        h += "</td></tr>"
+                        if !isLast {
+                            h += "<tr><td colspan=\"2\" style=\"padding: 0 0 0 \(pad)px;\">\(thinSepInline())</td></tr>"
+                        }
+                    }
+                }
+                h += groupEnd()
+            }
+
+        case let arr as [Any]:
+            // Array of simple values
+            h += groupStart()
+            for (i, item) in arr.enumerated() {
+                h += cellRow("[\(i)]", inlineValue(item), last: i == arr.count - 1)
+            }
+            h += groupEnd()
+
+        case let dict as [String: Any]:
+            // Dict: split simple/complex like top level
+            let keys = dict.keys.sorted()
+            let simpleK = keys.filter { isSimple(dict[$0]!) }
+            let complexK = keys.filter { !isSimple(dict[$0]!) }
+
+            if !simpleK.isEmpty {
+                h += groupStart()
+                for (i, key) in simpleK.enumerated() {
+                    h += cellRow(key, inlineValue(dict[key]!, key: key), last: i == simpleK.count - 1)
+                }
+                h += groupEnd()
+            }
+            for key in complexK {
+                h += "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr><td style=\"padding: 12px \(pad)px 4px \(pad)px;\">"
+                h += "<font size=\"1\" color=\"\(labelColor)\"><b>\(esc(key).uppercased())</b></font>"
+                h += "</td></tr></table>"
+                h += renderComplexValue(dict[key]!)
+            }
+
+        default:
+            h += groupStart()
+            h += "<tr><td style=\"padding: 10px \(pad)px;\">\(inlineValue(value))</td></tr>"
+            h += groupEnd()
+        }
+        return h
+    }
+
+    /// Render deeply nested content (inside a complex value cell)
+    private static func renderNestedBlock(_ value: Any) -> String {
+        switch value {
+        case let arr as [[String: Any]]:
+            var h = ""
+            for (i, dict) in arr.enumerated() {
+                if i > 0 { h += "<br>" }
+                let label = dict["identifier"] as? String ?? dict["Identifier"] as? String
+                if let label = label {
+                    h += "<font size=\"1\" color=\"\(labelColor)\">\(esc(label))</font><br>"
+                }
+                for key in dict.keys.sorted() {
+                    h += "<font size=\"1\" face=\"Menlo\" color=\"\(mutedColor)\">\(esc(key))</font> "
+                    h += inlineValue(dict[key]!)
+                    h += "<br>"
+                }
+            }
+            return h
+        case let arr as [Any]:
+            return arr.map { inlineValue($0) }.joined(separator: ", ")
+        case let dict as [String: Any]:
+            var h = ""
+            for key in dict.keys.sorted() {
+                h += "<font size=\"1\" face=\"Menlo\" color=\"\(mutedColor)\">\(esc(key))</font> "
+                if isSimple(dict[key]!) {
+                    h += inlineValue(dict[key]!)
+                } else {
+                    h += renderNestedBlock(dict[key]!)
+                }
+                h += "<br>"
+            }
+            return h
+        default:
+            return inlineValue(value)
+        }
+    }
+
+    /// Short alias for escapeHTML
+    private static func esc(_ s: String) -> String { escapeHTML(s) }
+
+    private static func wrapMobileconfigHTML(_ body: String) -> String {
+        """
         <!DOCTYPE html>
         <html>
-        <head>
-        <meta charset="utf-8">
+        <head><meta charset="utf-8">
         <style>
-        :root { color-scheme: light dark; }
-        * { box-sizing: border-box; }
         body {
-            font: 13px/1.5 -apple-system, "SF Pro Text", Helvetica, sans-serif;
-            margin: 0; padding: 20px;
-            background: #ffffff; color: #1d1d1f;
+            font: 13px/1.5 -apple-system, Helvetica, sans-serif;
+            margin: 0; padding: 0;
+            background: \(groupBg); color: #0f172a;
         }
-        .toggle-bar { display: flex; gap: 0; margin-bottom: 16px; }
-        .toggle-btn {
-            font: 12px/1 -apple-system, sans-serif; font-weight: 600;
-            padding: 6px 14px; border: 1px solid #d1d1d6; background: #fff;
-            color: #1d1d1f; cursor: pointer;
-        }
-        .toggle-btn:first-child { border-radius: 6px 0 0 6px; }
-        .toggle-btn:last-child { border-radius: 0 6px 6px 0; border-left: 0; }
-        .toggle-btn.active { background: #0071e3; color: #fff; border-color: #0071e3; }
-        .profile-header {
-            padding: 16px 20px; margin-bottom: 16px;
-            background: #f5f5f7; border-radius: 10px;
-        }
-        .profile-name { font-size: 18px; font-weight: 700; }
-        .profile-id { font-size: 12px; color: #86868b; font-family: ui-monospace, monospace; margin-top: 2px; }
-        .profile-meta { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
-        .badge {
-            font-size: 11px; font-weight: 600; padding: 2px 8px;
-            background: #0071e3; color: #fff; border-radius: 4px;
-        }
-        .payload-section { margin-bottom: 16px; }
-        .payload-header {
-            padding: 10px 16px; background: #f5f5f7; border-radius: 8px 8px 0 0;
-            border-bottom: 1px solid #e5e5ea;
-        }
-        .payload-name { font-size: 14px; font-weight: 600; }
-        .payload-type { font-size: 11px; color: #86868b; font-family: ui-monospace, monospace; }
-        table { width: 100%; border-collapse: collapse; }
-        tr { border-bottom: 1px solid #f0f0f0; }
-        td { padding: 6px 12px; vertical-align: top; }
-        .setting-key {
-            width: 40%; font-weight: 500; color: #1d1d1f;
-            font-family: ui-monospace, monospace; font-size: 12px;
-        }
-        .setting-value { font-size: 12px; }
-        .val-bool { color: #0071e3; font-weight: 600; }
-        .val-num { color: #bf5af2; font-weight: 600; }
-        .val-str { color: #1d1d1f; }
-        .val-empty { color: #86868b; }
-        ul { margin: 0; padding-left: 16px; }
-        table.nested { margin: 2px 0; }
-        table.nested td { padding: 3px 8px; }
-        #xml-view {
-            display: none;
-            font: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
-            white-space: pre-wrap; word-wrap: break-word;
-        }
+        pre { margin: 0; }
+        table { border-collapse: collapse; }
         .key       { color: #0451a5; }
-        .string    { color: #a31515; }
-        .number    { color: #098658; }
-        .bool      { color: #0000ff; }
-        .comment   { color: #6a9955; font-style: italic; }
-        .tag       { color: #800000; }
-        .attrName  { color: #e50000; }
-        .attrValue { color: #0451a5; }
+        .string    { color: #c41a16; }
+        .number    { color: #1c00cf; }
+        .bool      { color: #0b4f79; }
+        .comment   { color: #8e8e93; font-style: italic; }
+        .tag       { color: #643820; }
+        .attrName  { color: #5856d6; }
+        .attrValue { color: #c41a16; }
         .plistKey  { color: #0451a5; font-weight: bold; }
-        .plistValue { color: #a31515; font-weight: bold; }
-        @media (prefers-color-scheme: dark) {
-            body { background: #1e1e1e; color: #d4d4d4; }
-            .toggle-btn { background: #2a2a2c; color: #d4d4d4; border-color: #3a3a3c; }
-            .toggle-btn.active { background: #0a84ff; color: #fff; border-color: #0a84ff; }
-            .profile-header, .payload-header { background: #2a2a2c; }
-            .profile-id, .payload-type { color: #98989d; }
-            .badge { background: #0a84ff; }
-            tr { border-bottom-color: #2a2a2c; }
-            .setting-key { color: #d4d4d4; }
-            .val-bool { color: #0a84ff; }
-            .val-num { color: #bf5af2; }
-            .val-str { color: #d4d4d4; }
-            .val-empty { color: #98989d; }
-            .key       { color: #9cdcfe; }
-            .string    { color: #ce9178; }
-            .tag       { color: #569cd6; }
-            .attrName  { color: #9cdcfe; }
-            .attrValue { color: #ce9178; }
-            .plistKey  { color: #9cdcfe; font-weight: bold; }
-            .plistValue { color: #ce9178; font-weight: bold; }
-            .comment   { color: #6a9955; }
-        }
+        .plistValue { color: #c41a16; font-weight: bold; }
         </style>
         </head>
-        <body>
-        <div class="toggle-bar">
-            <button class="toggle-btn active" onclick="showView('structured')">Profile</button>
-            <button class="toggle-btn" onclick="showView('xml')">XML</button>
-        </div>
-        <div id="structured-view">\(body)</div>
-        <div id="xml-view">\(highlightedXML)</div>
-        <script>
-        function showView(view) {
-            document.getElementById('structured-view').style.display = view === 'structured' ? 'block' : 'none';
-            document.getElementById('xml-view').style.display = view === 'xml' ? 'block' : 'none';
-            document.querySelectorAll('.toggle-btn').forEach(function(btn) {
-                btn.classList.toggle('active', btn.textContent === (view === 'structured' ? 'Profile' : 'XML'));
-            });
-        }
-        </script>
-        </body>
+        <body>\(body)</body>
         </html>
         """
     }
