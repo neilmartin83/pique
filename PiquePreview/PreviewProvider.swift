@@ -30,7 +30,8 @@ class PreviewProvider: NSViewController, QLPreviewingController {
         do {
             let text = try FileReader.read(url: url)
             let format = FileFormat(pathExtension: url.pathExtension) ?? .json
-            let html = SyntaxHighlighter.highlight(text, format: format)
+            let isDark = view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let html = SyntaxHighlighter.highlight(text, format: format, darkMode: isDark)
 
             logger.info("Preview for \(url.lastPathComponent, privacy: .public)")
 
@@ -46,6 +47,9 @@ class PreviewProvider: NSViewController, QLPreviewingController {
             if let scrollView = view as? NSScrollView,
                let textView = scrollView.documentView as? NSTextView {
                 textView.textStorage?.setAttributedString(attrString)
+                let bg: NSColor = isDark ? NSColor(red: 0.059, green: 0.090, blue: 0.165, alpha: 1) : .white
+                textView.backgroundColor = bg
+                scrollView.backgroundColor = bg
             }
 
             handler(nil)
