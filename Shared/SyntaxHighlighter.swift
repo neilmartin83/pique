@@ -44,21 +44,24 @@ enum SyntaxHighlighter {
         // Profile header
         let displayName = plist["PayloadDisplayName"] as? String ?? "Untitled Profile"
         let identifier = plist["PayloadIdentifier"] as? String ?? ""
-        let payloadType = plist["PayloadType"] as? String ?? ""
+        let payloads = plist["PayloadContent"] as? [[String: Any]] ?? []
+
+        // Collect actual payload types (the useful info)
+        let payloadTypes = payloads.compactMap { $0["PayloadType"] as? String }
 
         html += "<div class=\"profile-header\">"
         html += "<div class=\"profile-name\">\(escapeHTML(displayName))</div>"
         if !identifier.isEmpty {
             html += "<div class=\"profile-id\">\(escapeHTML(identifier))</div>"
         }
-        html += "<div class=\"profile-meta\">"
-        if !payloadType.isEmpty {
-            html += "<span class=\"badge\">\(escapeHTML(payloadType))</span>"
+        if !payloadTypes.isEmpty {
+            html += "<div class=\"profile-meta\">"
+            for pt in payloadTypes {
+                html += "<span class=\"badge\">\(escapeHTML(pt))</span>"
+            }
+            html += "</div>"
         }
-        if let version = plist["PayloadVersion"] {
-            html += "<span class=\"badge\">v\(version)</span>"
-        }
-        html += "</div></div>"
+        html += "</div>"
 
         // Top-level settings (excluding payload metadata and PayloadContent)
         let metaKeys: Set = ["PayloadType", "PayloadVersion", "PayloadUUID", "PayloadIdentifier",
@@ -70,30 +73,28 @@ enum SyntaxHighlighter {
         }
 
         // Payload content
-        if let payloads = plist["PayloadContent"] as? [[String: Any]] {
-            for payload in payloads {
-                let name = payload["PayloadDisplayName"] as? String
-                    ?? payload["PayloadType"] as? String
-                    ?? "Payload"
-                let type = payload["PayloadType"] as? String ?? ""
+        for payload in payloads {
+            let name = payload["PayloadDisplayName"] as? String
+                ?? payload["PayloadType"] as? String
+                ?? "Payload"
+            let type = payload["PayloadType"] as? String ?? ""
 
-                html += "<div class=\"payload-section\">"
-                html += "<div class=\"payload-header\">"
-                html += "<div class=\"payload-name\">\(escapeHTML(name))</div>"
-                if !type.isEmpty {
-                    html += "<div class=\"payload-type\">\(escapeHTML(type))</div>"
-                }
-                html += "</div>"
-
-                let settings = payload.filter { !metaKeys.contains($0.key) }
-                if !settings.isEmpty {
-                    html += renderSettingsTable(settings, title: nil)
-                }
-                html += "</div>"
+            html += "<div class=\"payload-section\">"
+            html += "<div class=\"payload-header\">"
+            html += "<div class=\"payload-name\">\(escapeHTML(name))</div>"
+            if !type.isEmpty {
+                html += "<div class=\"payload-type\">\(escapeHTML(type))</div>"
             }
+            html += "</div>"
+
+            let settings = payload.filter { !metaKeys.contains($0.key) }
+            if !settings.isEmpty {
+                html += renderSettingsTable(settings, title: nil)
+            }
+            html += "</div>"
         }
 
-        return wrapMobileconfigHTML(html)
+        return wrapMobileconfigHTML(html, rawXML: String(data: data, encoding: .utf8) ?? "")
     }
 
     private static func renderSettingsTable(_ settings: [String: Any], title: String?) -> String {
@@ -141,8 +142,10 @@ enum SyntaxHighlighter {
         }
     }
 
-    private static func wrapMobileconfigHTML(_ body: String) -> String {
-        """
+    private static func wrapMobileconfigHTML(_ body: String, rawXML: String) -> String {
+        let xmlTokens = tokenizeXML(rawXML)
+        let highlightedXML = renderTokens(xmlTokens)
+        return """
         <!DOCTYPE html>
         <html>
         <head>
@@ -155,13 +158,22 @@ enum SyntaxHighlighter {
             margin: 0; padding: 20px;
             background: #ffffff; color: #1d1d1f;
         }
+        .toggle-bar { display: flex; gap: 0; margin-bottom: 16px; }
+        .toggle-btn {
+            font: 12px/1 -apple-system, sans-serif; font-weight: 600;
+            padding: 6px 14px; border: 1px solid #d1d1d6; background: #fff;
+            color: #1d1d1f; cursor: pointer;
+        }
+        .toggle-btn:first-child { border-radius: 6px 0 0 6px; }
+        .toggle-btn:last-child { border-radius: 0 6px 6px 0; border-left: 0; }
+        .toggle-btn.active { background: #0071e3; color: #fff; border-color: #0071e3; }
         .profile-header {
             padding: 16px 20px; margin-bottom: 16px;
             background: #f5f5f7; border-radius: 10px;
         }
         .profile-name { font-size: 18px; font-weight: 700; }
         .profile-id { font-size: 12px; color: #86868b; font-family: ui-monospace, monospace; margin-top: 2px; }
-        .profile-meta { margin-top: 8px; display: flex; gap: 6px; }
+        .profile-meta { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
         .badge {
             font-size: 11px; font-weight: 600; padding: 2px 8px;
             background: #0071e3; color: #fff; border-radius: 4px;
@@ -188,8 +200,25 @@ enum SyntaxHighlighter {
         ul { margin: 0; padding-left: 16px; }
         table.nested { margin: 2px 0; }
         table.nested td { padding: 3px 8px; }
+        #xml-view {
+            display: none;
+            font: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+            white-space: pre-wrap; word-wrap: break-word;
+        }
+        .key       { color: #0451a5; }
+        .string    { color: #a31515; }
+        .number    { color: #098658; }
+        .bool      { color: #0000ff; }
+        .comment   { color: #6a9955; font-style: italic; }
+        .tag       { color: #800000; }
+        .attrName  { color: #e50000; }
+        .attrValue { color: #0451a5; }
+        .plistKey  { color: #0451a5; font-weight: bold; }
+        .plistValue { color: #a31515; font-weight: bold; }
         @media (prefers-color-scheme: dark) {
             body { background: #1e1e1e; color: #d4d4d4; }
+            .toggle-btn { background: #2a2a2c; color: #d4d4d4; border-color: #3a3a3c; }
+            .toggle-btn.active { background: #0a84ff; color: #fff; border-color: #0a84ff; }
             .profile-header, .payload-header { background: #2a2a2c; }
             .profile-id, .payload-type { color: #98989d; }
             .badge { background: #0a84ff; }
@@ -199,10 +228,34 @@ enum SyntaxHighlighter {
             .val-num { color: #bf5af2; }
             .val-str { color: #d4d4d4; }
             .val-empty { color: #98989d; }
+            .key       { color: #9cdcfe; }
+            .string    { color: #ce9178; }
+            .tag       { color: #569cd6; }
+            .attrName  { color: #9cdcfe; }
+            .attrValue { color: #ce9178; }
+            .plistKey  { color: #9cdcfe; font-weight: bold; }
+            .plistValue { color: #ce9178; font-weight: bold; }
+            .comment   { color: #6a9955; }
         }
         </style>
         </head>
-        <body>\(body)</body>
+        <body>
+        <div class="toggle-bar">
+            <button class="toggle-btn active" onclick="showView('structured')">Profile</button>
+            <button class="toggle-btn" onclick="showView('xml')">XML</button>
+        </div>
+        <div id="structured-view">\(body)</div>
+        <div id="xml-view">\(highlightedXML)</div>
+        <script>
+        function showView(view) {
+            document.getElementById('structured-view').style.display = view === 'structured' ? 'block' : 'none';
+            document.getElementById('xml-view').style.display = view === 'xml' ? 'block' : 'none';
+            document.querySelectorAll('.toggle-btn').forEach(function(btn) {
+                btn.classList.toggle('active', btn.textContent === (view === 'structured' ? 'Profile' : 'XML'));
+            });
+        }
+        </script>
+        </body>
         </html>
         """
     }
