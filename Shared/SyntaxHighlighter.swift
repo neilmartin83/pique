@@ -1,3 +1,8 @@
+//  SyntaxHighlighter.swift
+//  Pique
+//
+//  Created by Henry Stamerjohann, Declarative IT GmbH, 07/03/2026
+
 import Foundation
 
 enum FileFormat {

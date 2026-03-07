@@ -1,3 +1,8 @@
+//  PreviewProvider.swift
+//  Pique
+//
+//  Created by Henry Stamerjohann, Declarative IT GmbH, 07/03/2026
+
 import Cocoa
 import QuickLookUI
 import UniformTypeIdentifiers
@@ -5,7 +10,7 @@ import OSLog
 
 @objc(PreviewProvider)
 class PreviewProvider: NSViewController, QLPreviewingController {
-    private let logger = Logger(subsystem: "com.pique.app", category: "preview")
+    private let logger = Logger(subsystem: "io.declarative.pique.app", category: "preview")
 
     override func loadView() {
         let scrollView = NSScrollView()
