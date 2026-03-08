@@ -10,7 +10,7 @@ import OSLog
 
 @objc(PreviewProvider)
 class PreviewProvider: NSViewController, QLPreviewingController {
-    private let logger = Logger(subsystem: "io.declarative.pique.app", category: "preview")
+    private let logger = Logger(subsystem: "io.macadmins.pique", category: "preview")
 
     override func loadView() {
         let scrollView = NSScrollView()
