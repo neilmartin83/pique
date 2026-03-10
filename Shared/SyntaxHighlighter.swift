@@ -6,7 +6,7 @@
 import Foundation
 
 enum FileFormat {
-    case json, yaml, toml, xml, mobileconfig, shell, powershell, python, ruby, go, rust, javascript, markdown
+    case json, yaml, toml, xml, mobileconfig, shell, powershell, python, ruby, go, rust, javascript, markdown, hcl
 
     init?(pathExtension: String) {
         switch pathExtension.lowercased() {
@@ -23,6 +23,7 @@ enum FileFormat {
         case "rs": self = .rust
         case "js", "jsx", "ts", "tsx", "mjs", "cjs": self = .javascript
         case "md", "markdown", "adoc": self = .markdown
+        case "tf", "tfvars", "hcl": self = .hcl
         default: return nil
         }
     }
@@ -56,6 +57,7 @@ enum SyntaxHighlighter {
         case .rust: tokens = tokenizeRust(source)
         case .javascript: tokens = tokenizeJavaScript(source)
         case .markdown: return renderMarkdown(source, dark: darkMode)
+        case .hcl: tokens = tokenizeHCL(source)
         }
         return wrapHTML(renderTokens(tokens), dark: darkMode)
     }
@@ -941,6 +943,46 @@ enum SyntaxHighlighter {
             else if let b = match[6] { return [Token(text: b, kind: .bool)] }
             else if let op = match[7] { return [Token(text: op, kind: .operator)] }
             else if let num = match[8] { return [Token(text: num, kind: .number)] }
+            return nil
+        }
+    }
+
+    // MARK: - HCL / Terraform Tokenizer
+
+    private static func tokenizeHCL(_ src: String) -> [Token] {
+        let regex = try! Regex(
+            #"(?m)(#[^\n]*|//[^\n]*)"# +                // 1: line comment
+            #"|(/\*[\s\S]*?\*/)"# +                      // 2: block comment
+            #"|("(?:[^"\\]|\\.)*")"# +                   // 3: double-quoted string
+            #"|(<<-?\s*(\w+)\n[\s\S]*?\n\s*\5)"# +      // 4: heredoc (5: delimiter)
+            #"|\b(variable|output|resource|data|provider|terraform|locals|module|moved|import|check|removed)\b"# + // 6: block type keyword
+            #"|\b(for_each|count|depends_on|lifecycle|source|version|required_providers|required_version|backend|cloud)\b"# + // 7: meta-argument / config keyword
+            #"|\b(for|in|if|else|endif|endfor)\b"# +    // 8: expression keyword
+            #"|\b(true|false|null)\b"# +                 // 9: bool/null
+            #"|\b(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b"# + // 10: number
+            #"|(\$\{[^}]*\})"# +                         // 11: interpolation ${}
+            #"|(%\{[^}]*\})"# +                          // 12: directive %{}
+            #"|([\w][\w\-]*)\s*(\{)"# +                  // 13: identifier before { (14: brace)
+            #"|([\w][\w\-]*)\s*(=)"#                     // 15: key before = (16: equals)
+        )
+        return tokenize(src, regex: regex) { match in
+            if let comment = match[1] { return [Token(text: comment, kind: .comment)] }
+            else if let comment = match[2] { return [Token(text: comment, kind: .comment)] }
+            else if let str = match[3] { return [Token(text: str, kind: .string)] }
+            else if let heredoc = match[4] { return [Token(text: heredoc, kind: .string)] }
+            else if let kw = match[6] { return [Token(text: kw, kind: .keyword)] }
+            else if let kw = match[7] { return [Token(text: kw, kind: .keyword)] }
+            else if let kw = match[8] { return [Token(text: kw, kind: .keyword)] }
+            else if let b = match[9] { return [Token(text: b, kind: .bool)] }
+            else if let num = match[10] { return [Token(text: num, kind: .number)] }
+            else if let interp = match[11] { return [Token(text: interp, kind: .variable)] }
+            else if let dir = match[12] { return [Token(text: dir, kind: .variable)] }
+            else if let ident = match[13], let brace = match[14] {
+                return [Token(text: ident, kind: .tag), Token(text: brace, kind: .punctuation)]
+            }
+            else if let key = match[15], let eq = match[16] {
+                return [Token(text: key, kind: .key), Token(text: eq, kind: .punctuation)]
+            }
             return nil
         }
     }
