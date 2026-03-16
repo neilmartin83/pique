@@ -51,7 +51,16 @@ class PreviewProvider: NSViewController, QLPreviewingController {
                 text = FileReader.decodeToString(data)
             }
 
-            let isDark = view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let ext = url.pathExtension.lowercased()
+            let isDark: Bool
+            switch AppearanceSettings.override(for: ext) {
+            case .system:
+                isDark = view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            case .light:
+                isDark = false
+            case .dark:
+                isDark = true
+            }
             let html = SyntaxHighlighter.highlight(text, format: format, darkMode: isDark)
 
             logger.info("Preview for \(url.lastPathComponent, privacy: .public)")
