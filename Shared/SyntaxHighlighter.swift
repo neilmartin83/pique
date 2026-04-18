@@ -32,9 +32,28 @@ enum FileFormat {
 }
 
 enum SyntaxHighlighter {
-    /// Maximum characters to tokenize for syntax highlighting.
+    /// Maximum UTF-8 bytes to tokenize for syntax highlighting.
     /// Beyond this the preview is truncated at the last line boundary within the limit.
-    private static let previewCharLimit = 512_000  // Character limit; approximately 500 KB for ASCII text
+    private static let previewByteLimit = 512_000  // Byte limit; approximately 500 KB
+
+    /// Convert a UTF-8 byte limit into a valid `String.Index`, backing up to the
+    /// nearest valid boundary when the limit lands in the middle of a scalar.
+    private static func previewCutIndex(in text: String, byteLimit: Int) -> String.Index {
+        let utf8 = text.utf8
+        let limitedIndex = utf8.index(utf8.startIndex, offsetBy: byteLimit, limitedBy: utf8.endIndex)
+            ?? utf8.endIndex
+
+        if limitedIndex == utf8.endIndex {
+            return text.endIndex
+        }
+
+        var candidate = limitedIndex
+        while candidate > utf8.startIndex, candidate.samePosition(in: text) == nil {
+            candidate = utf8.index(before: candidate)
+        }
+
+        return candidate.samePosition(in: text) ?? text.startIndex
+    }
 
     /// Count lines efficiently via a single pass over UTF-8 bytes.
     private static func lineCount(_ text: String) -> Int {
@@ -63,11 +82,11 @@ enum SyntaxHighlighter {
     }
 
     static func highlight(_ source: String, format: FileFormat, darkMode: Bool = false) -> String {
-        // Truncate very large files at the last line boundary within the limit
+        // Truncate very large files at the last line boundary within the byte limit
         let truncated: Bool
         let text: String
-        if source.count > previewCharLimit {
-            let cutIndex = source.index(source.startIndex, offsetBy: previewCharLimit)
+        if source.utf8.count > previewByteLimit {
+            let cutIndex = previewCutIndex(in: source, byteLimit: previewByteLimit)
             if let lineEnd = source[..<cutIndex].lastIndex(of: "\n") {
                 text = String(source[..<lineEnd])
             } else {
@@ -91,13 +110,7 @@ enum SyntaxHighlighter {
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             isAppleConfigProfile(json)
         {
-            if var html = renderJSONProfile(json, rawJSON: text, dark: darkMode) {
-                if truncated {
-                    html = insertTruncationNotice(
-                        into: html,
-                        notice: truncationNotice(source: source, shown: text, darkMode: darkMode)
-                    )
-                }
+            if let html = renderJSONProfile(json, rawJSON: text, dark: darkMode) {
                 return html
             }
         }
