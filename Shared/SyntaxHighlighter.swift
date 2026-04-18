@@ -33,30 +33,33 @@ enum FileFormat {
 
 enum SyntaxHighlighter {
     /// Maximum characters to tokenize for syntax highlighting.
-    /// Beyond this the preview is truncated at the nearest line boundary.
-    private static let previewCharLimit = 512_000  // ~512,000 characters of text
+    /// Beyond this the preview is truncated at the last line boundary within the limit.
+    private static let previewCharLimit = 512_000  // ~500 KB of text
+
+    /// Count lines efficiently via a single pass over UTF-8 bytes.
+    private static func lineCount(_ text: String) -> Int {
+        var count = 1
+        for byte in text.utf8 where byte == 0x0A {
+            count += 1
+        }
+        return count
+    }
+
+    /// Build the truncation notice HTML appended to previews of large files.
+    private static func truncationNotice(source: String, shown: String, darkMode: Bool) -> String {
+        let muted = darkMode ? "#98989d" : "#6e6e73"
+        let totalLines = lineCount(source)
+        let shownLines = lineCount(shown)
+        return "\n\n<span style=\"color:\(muted);font-style:italic;\">⋯ Preview truncated (\(shownLines.formatted()) of \(totalLines.formatted()) lines shown)</span>\n"
+    }
 
     static func highlight(_ source: String, format: FileFormat, darkMode: Bool = false) -> String {
-        if format == .mobileconfig, let data = source.data(using: .utf8) {
-            if let html = renderMobileconfig(data, dark: darkMode) {
-                return html
-            }
-        }
-        if format == .json, let data = source.data(using: .utf8),
-            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            isAppleConfigProfile(json)
-        {
-            if let html = renderJSONProfile(json, rawJSON: source, dark: darkMode) {
-                return html
-            }
-        }
-
-        // Truncate very large files at the nearest line boundary
+        // Truncate very large files at the last line boundary within the limit
         let truncated: Bool
         let text: String
         if source.count > previewCharLimit {
             let cutIndex = source.index(source.startIndex, offsetBy: previewCharLimit)
-            if let lineEnd = source[cutIndex...].firstIndex(of: "\n") {
+            if let lineEnd = source[..<cutIndex].lastIndex(of: "\n") {
                 text = String(source[..<lineEnd])
             } else {
                 text = String(source[..<cutIndex])
@@ -67,31 +70,47 @@ enum SyntaxHighlighter {
             truncated = false
         }
 
-        let tokens: [Token]
-        switch format {
-        case .json: tokens = tokenizeJSON(text)
-        case .yaml: tokens = tokenizeYAML(text)
-        case .toml: tokens = tokenizeTOML(text)
-        case .xml, .mobileconfig: tokens = tokenizeXML(text)
-        case .shell: tokens = tokenizeShell(text)
-        case .powershell: tokens = tokenizePowerShell(text)
-        case .python: tokens = tokenizePython(text)
-        case .ruby: tokens = tokenizeRuby(text)
-        case .go: tokens = tokenizeGo(text)
-        case .rust: tokens = tokenizeRust(text)
-        case .javascript: tokens = tokenizeJavaScript(text)
-        case .markdown: return renderMarkdown(text, dark: darkMode)
-        case .hcl: tokens = tokenizeHCL(text)
-        case .log: tokens = tokenizeLog(text)
+        // Early returns for special renderers — truncation is applied above
+        if format == .mobileconfig, let data = text.data(using: .utf8) {
+            if var html = renderMobileconfig(data, dark: darkMode) {
+                if truncated { html += truncationNotice(source: source, shown: text, darkMode: darkMode) }
+                return html
+            }
+        }
+        if format == .json, let data = text.data(using: .utf8),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            isAppleConfigProfile(json)
+        {
+            if var html = renderJSONProfile(json, rawJSON: text, dark: darkMode) {
+                if truncated { html += truncationNotice(source: source, shown: text, darkMode: darkMode) }
+                return html
+            }
         }
 
-        var body = renderTokens(tokens)
+        var body: String
+        switch format {
+        case .json: body = renderTokens(tokenizeJSON(text))
+        case .yaml: body = renderTokens(tokenizeYAML(text))
+        case .toml: body = renderTokens(tokenizeTOML(text))
+        case .xml, .mobileconfig: body = renderTokens(tokenizeXML(text))
+        case .shell: body = renderTokens(tokenizeShell(text))
+        case .powershell: body = renderTokens(tokenizePowerShell(text))
+        case .python: body = renderTokens(tokenizePython(text))
+        case .ruby: body = renderTokens(tokenizeRuby(text))
+        case .go: body = renderTokens(tokenizeGo(text))
+        case .rust: body = renderTokens(tokenizeRust(text))
+        case .javascript: body = renderTokens(tokenizeJavaScript(text))
+        case .markdown: body = renderMarkdown(text, dark: darkMode)
+        case .hcl: body = renderTokens(tokenizeHCL(text))
+        case .log: body = renderTokens(tokenizeLog(text))
+        }
+
         if truncated {
-            let muted = darkMode ? "#98989d" : "#6e6e73"
-            let totalLines = source.split(separator: "\n", omittingEmptySubsequences: false).count
-            let shownLines = text.split(separator: "\n", omittingEmptySubsequences: false).count
-            body +=
-                "\n\n<span style=\"color:\(muted);font-style:italic;\">⋯ Preview truncated (\(shownLines.formatted()) of \(totalLines.formatted()) lines shown)</span>\n"
+            body += truncationNotice(source: source, shown: text, darkMode: darkMode)
+        }
+
+        if format == .markdown {
+            return body  // renderMarkdown already wraps in full HTML
         }
         return wrapHTML(body, dark: darkMode)
     }
@@ -769,6 +788,11 @@ enum SyntaxHighlighter {
         .keyword   { color: \(t.xmlBool); }
         .operator  { color: \(t.xmlComment); }
         .command   { color: \(t.xmlAttrName); }
+        .logError  { color: \(t.boolNo); font-weight: bold; }
+        .logWarn   { color: \(t.scopeDevice); }
+        .logInfo   { color: \(t.scopeUser); }
+        .logDebug  { color: \(t.muted); font-style: italic; }
+        .logTimestamp { color: \(t.muted); font-style: italic; }
         </style>
         </head>
         <body>\(body)</body>
@@ -781,7 +805,8 @@ enum SyntaxHighlighter {
     private struct Token {
         enum Kind: String {
             case plain, key, string, number, bool, comment, tag, attrName, attrValue, punctuation,
-                plistKey, plistValue, variable, keyword, `operator`, command
+                plistKey, plistValue, variable, keyword, `operator`, command,
+                logError, logWarn, logInfo, logDebug, logTimestamp
         }
         let text: String
         let kind: Kind
@@ -1150,28 +1175,28 @@ enum SyntaxHighlighter {
         )
         let handler: (MatchResult) -> [Token]? = { match in
             if let ts = match[1] {
-                return [Token(text: ts, kind: .comment)]
+                return [Token(text: ts, kind: .logTimestamp)]
             } else if let ts = match[2] {
-                return [Token(text: ts, kind: .comment)]
+                return [Token(text: ts, kind: .logTimestamp)]
             } else if let ts = match[3] {
-                return [Token(text: ts, kind: .comment)]
+                return [Token(text: ts, kind: .logTimestamp)]
             } else if let sev = match[4] {
-                return [Token(text: sev, kind: .plistValue)]
+                return [Token(text: sev, kind: .logError)]
             } else if let sev = match[5] {
-                return [Token(text: sev, kind: .plistValue)]
+                return [Token(text: sev, kind: .logError)]
             } else if let sev = match[6] {
-                return [Token(text: sev, kind: .attrName)]
+                return [Token(text: sev, kind: .logWarn)]
             } else if let sev = match[7] {
-                return [Token(text: sev, kind: .bool)]
+                return [Token(text: sev, kind: .logInfo)]
             } else if let sev = match[8] {
-                return [Token(text: sev, kind: .comment)]
+                return [Token(text: sev, kind: .logDebug)]
             } else if let ip = match[9] {
                 return [Token(text: ip, kind: .number)]
             } else if let method = match[10] {
                 return [Token(text: method, kind: .keyword)]
             } else if let status = match[11] {
                 let code = Int(status) ?? 0
-                let kind: Token.Kind = code >= 500 ? .plistValue : code >= 400 ? .attrName : code >= 300 ? .attrValue : .bool
+                let kind: Token.Kind = code >= 500 ? .logError : code >= 400 ? .logWarn : code >= 300 ? .logDebug : .logInfo
                 return [Token(text: status, kind: kind)]
             } else if let str = match[12] {
                 return [Token(text: str, kind: .string)]
@@ -1584,6 +1609,11 @@ enum SyntaxHighlighter {
                 .keyword   { color: #c586c0; }
                 .operator  { color: #abb2bf; }
                 .command   { color: #61afef; }
+                .logError  { color: #ff453a; font-weight: bold; }
+                .logWarn   { color: #ff9f0a; }
+                .logInfo   { color: #0a84ff; }
+                .logDebug  { color: #636366; font-style: italic; }
+                .logTimestamp { color: #636366; font-style: italic; }
                 """
         } else {
             colors = """
@@ -1601,6 +1631,11 @@ enum SyntaxHighlighter {
                 .keyword   { color: #af00db; }
                 .operator  { color: #383a42; }
                 .command   { color: #4078f2; }
+                .logError  { color: #dc2626; font-weight: bold; }
+                .logWarn   { color: #ea580c; }
+                .logInfo   { color: #2563eb; }
+                .logDebug  { color: #94a3b8; font-style: italic; }
+                .logTimestamp { color: #94a3b8; font-style: italic; }
                 """
         }
         return """

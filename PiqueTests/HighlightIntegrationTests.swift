@@ -346,22 +346,22 @@ final class HighlightIntegrationTests: XCTestCase {
     func testLogSeverityLevels() {
         let log = "ERROR something failed\nWARN low disk\nINFO started\nDEBUG tick"
         let html = body(SyntaxHighlighter.highlight(log, format: .log))
-        XCTAssertTrue(html.contains(#"<span class="plistValue">ERROR</span>"#))
-        XCTAssertTrue(html.contains(#"<span class="attrName">WARN</span>"#))
-        XCTAssertTrue(html.contains(#"<span class="bool">INFO</span>"#))
-        XCTAssertTrue(html.contains(#"<span class="comment">DEBUG</span>"#))
+        XCTAssertTrue(html.contains(#"<span class="logError">ERROR</span>"#))
+        XCTAssertTrue(html.contains(#"<span class="logWarn">WARN</span>"#))
+        XCTAssertTrue(html.contains(#"<span class="logInfo">INFO</span>"#))
+        XCTAssertTrue(html.contains(#"<span class="logDebug">DEBUG</span>"#))
     }
 
     func testLogISOTimestamp() {
         let log = "2026-03-28T14:05:33Z INFO ready"
         let html = body(SyntaxHighlighter.highlight(log, format: .log))
-        XCTAssertTrue(html.contains(#"<span class="comment">2026-03-28T14:05:33Z</span>"#))
+        XCTAssertTrue(html.contains(#"<span class="logTimestamp">2026-03-28T14:05:33Z</span>"#))
     }
 
     func testLogSyslogTimestamp() {
         let log = "Mar 28 14:05:33 myhost syslogd: restart"
         let html = body(SyntaxHighlighter.highlight(log, format: .log))
-        XCTAssertTrue(html.contains(#"<span class="comment">Mar 28 14:05:33</span>"#))
+        XCTAssertTrue(html.contains(#"<span class="logTimestamp">Mar 28 14:05:33</span>"#))
     }
 
     func testLogIPv4Address() {
@@ -386,8 +386,8 @@ final class HighlightIntegrationTests: XCTestCase {
     func testLogCriticalSeverity() {
         let log = "FATAL out of memory\nCRITICAL disk failure"
         let html = body(SyntaxHighlighter.highlight(log, format: .log))
-        XCTAssertTrue(html.contains(#"<span class="plistValue">FATAL</span>"#))
-        XCTAssertTrue(html.contains(#"<span class="plistValue">CRITICAL</span>"#))
+        XCTAssertTrue(html.contains(#"<span class="logError">FATAL</span>"#))
+        XCTAssertTrue(html.contains(#"<span class="logError">CRITICAL</span>"#))
     }
 
     func testLogApostropheNotTreatedAsString() {
@@ -403,15 +403,15 @@ final class HighlightIntegrationTests: XCTestCase {
     func testLogSeverityWithColon() {
         let log = "2025-09-16 06:20:56 +0100 – INFO: Notifying that Docker has been installed"
         let html = body(SyntaxHighlighter.highlight(log, format: .log))
-        XCTAssertTrue(html.contains(#"<span class="bool">INFO:</span>"#))
+        XCTAssertTrue(html.contains(#"<span class="logInfo">INFO:</span>"#))
     }
 
     func testLogMultiLinePreservesAllLines() {
         let log = "INFO line one\nWARN line two\nERROR line three"
         let html = body(SyntaxHighlighter.highlight(log, format: .log))
-        XCTAssertTrue(html.contains(#"<span class="bool">INFO</span>"#))
-        XCTAssertTrue(html.contains(#"<span class="attrName">WARN</span>"#))
-        XCTAssertTrue(html.contains(#"<span class="plistValue">ERROR</span>"#))
+        XCTAssertTrue(html.contains(#"<span class="logInfo">INFO</span>"#))
+        XCTAssertTrue(html.contains(#"<span class="logWarn">WARN</span>"#))
+        XCTAssertTrue(html.contains(#"<span class="logError">ERROR</span>"#))
         XCTAssertTrue(html.contains("line one"))
         XCTAssertTrue(html.contains("line two"))
         XCTAssertTrue(html.contains("line three"))
@@ -420,12 +420,12 @@ final class HighlightIntegrationTests: XCTestCase {
     func testLogHTTPStatusCodeColoring() {
         let log = "status 200\nstatus 404\nstatus 500"
         let html = body(SyntaxHighlighter.highlight(log, format: .log))
-        // 2xx → .bool (blue/green)
-        XCTAssertTrue(html.contains(#"<span class="bool">200</span>"#))
-        // 4xx → .attrName (orange/warning)
-        XCTAssertTrue(html.contains(#"<span class="attrName">404</span>"#))
-        // 5xx → .plistValue (bold red)
-        XCTAssertTrue(html.contains(#"<span class="plistValue">500</span>"#))
+        // 2xx → .logInfo (blue)
+        XCTAssertTrue(html.contains(#"<span class="logInfo">200</span>"#))
+        // 4xx → .logWarn (orange)
+        XCTAssertTrue(html.contains(#"<span class="logWarn">404</span>"#))
+        // 5xx → .logError (bold red)
+        XCTAssertTrue(html.contains(#"<span class="logError">500</span>"#))
     }
 
     func testLogFilePath() {
