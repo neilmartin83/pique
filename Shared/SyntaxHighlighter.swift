@@ -34,7 +34,7 @@ enum FileFormat {
 enum SyntaxHighlighter {
     /// Maximum characters to tokenize for syntax highlighting.
     /// Beyond this the preview is truncated at the nearest line boundary.
-    private static let previewCharLimit = 512_000  // ~500 KB of text
+    private static let previewCharLimit = 512_000  // ~512,000 characters of text
 
     static func highlight(_ source: String, format: FileFormat, darkMode: Bool = false) -> String {
         if format == .mobileconfig, let data = source.data(using: .utf8) {
