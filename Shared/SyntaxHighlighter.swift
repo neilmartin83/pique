@@ -57,8 +57,7 @@ enum SyntaxHighlighter {
         // Truncate very large files at the last line boundary within the limit
         let truncated: Bool
         let text: String
-        if source.count > previewCharLimit {
-            let cutIndex = source.index(source.startIndex, offsetBy: previewCharLimit)
+        if let cutIndex = source.index(source.startIndex, offsetBy: previewCharLimit, limitedBy: source.endIndex) {
             if let lineEnd = source[..<cutIndex].lastIndex(of: "\n") {
                 text = String(source[..<lineEnd])
             } else {
@@ -106,13 +105,27 @@ enum SyntaxHighlighter {
         }
 
         if truncated {
-            body += truncationNotice(source: source, shown: text, darkMode: darkMode)
+            let notice = truncationNotice(source: source, shown: text, darkMode: darkMode)
+            if format == .markdown {
+                body = insertHTMLFragmentBeforeBodyClose(notice, in: body)
+            } else {
+                body += notice
+            }
         }
 
         if format == .markdown {
             return body  // renderMarkdown already wraps in full HTML
         }
         return wrapHTML(body, dark: darkMode)
+    }
+
+    private static func insertHTMLFragmentBeforeBodyClose(_ fragment: String, in html: String) -> String {
+        if let bodyCloseRange = html.range(of: "</body>", options: .caseInsensitive) {
+            var updatedHTML = html
+            updatedHTML.insert(contentsOf: fragment, at: bodyCloseRange.lowerBound)
+            return updatedHTML
+        }
+        return html + fragment
     }
 
     // MARK: - Mobileconfig Renderer
