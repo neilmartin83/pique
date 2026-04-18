@@ -394,8 +394,8 @@ final class HighlightIntegrationTests: XCTestCase {
         let log = "INFO: Successfully validated the received JWT's signature..."
         let html = body(SyntaxHighlighter.highlight(log, format: .log))
         // The apostrophe in JWT's must NOT cause text to be swallowed into a string span
-        XCTAssertFalse(html.contains(#"<span class="string">'s signature...'"#),
-                        "Apostrophe in JWT's should not start a quoted string")
+        XCTAssertFalse(html.contains(#"class="string""#),
+                       "Apostrophe in JWT's should not start a quoted string")
         XCTAssertTrue(html.contains("JWT"))
         XCTAssertTrue(html.contains("signature"))
     }

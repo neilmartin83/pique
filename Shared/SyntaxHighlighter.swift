@@ -87,7 +87,7 @@ enum SyntaxHighlighter {
                 return html
             }
         }
-        if format == .json, let data = source.data(using: .utf8),
+        if format == .json, !truncated, let data = source.data(using: .utf8),
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             isAppleConfigProfile(json)
         {
