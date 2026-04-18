@@ -32,53 +32,9 @@ enum FileFormat {
 }
 
 enum SyntaxHighlighter {
-    /// Maximum characters to tokenize for syntax highlighting.
-    /// Beyond this the preview is truncated at the last line boundary within the limit.
-    private static let previewCharLimit = 512_000  // ~500 KB of text
-
-    /// Count lines efficiently via a single pass over UTF-8 bytes.
-    private static func lineCount(_ text: String) -> Int {
-        var count = 1
-        for byte in text.utf8 where byte == 0x0A {
-            count += 1
-        }
-        return count
-    }
-
-    /// Build the truncation notice HTML appended to previews of large files.
-    private static func truncationNotice(source: String, shown: String, darkMode: Bool) -> String {
-        let muted = darkMode ? "#98989d" : "#6e6e73"
-        let totalLines = lineCount(source)
-        let shownLines = lineCount(shown)
-        return "\n\n<span style=\"color:\(muted);font-style:italic;\">⋯ Preview truncated (\(shownLines.formatted()) of \(totalLines.formatted()) lines shown)</span>\n"
-    }
-
     static func highlight(_ source: String, format: FileFormat, darkMode: Bool = false) -> String {
-        // Truncate very large files at the last line boundary within the limit
-        let truncated: Bool
-        let text: String
-        if let cutIndex = source.index(source.startIndex, offsetBy: previewCharLimit, limitedBy: source.endIndex),
-            cutIndex < source.endIndex
-        {
-            if let lineEnd = source[..<cutIndex].lastIndex(of: "\n") {
-                text = String(source[..<lineEnd])
-            } else {
-                text = String(source[..<cutIndex])
-            }
-            truncated = true
-        } else {
-            text = source
-            truncated = false
-        }
-
-        // Early returns for special renderers — parse structured data from the full source,
-        // and only apply truncation to the displayed preview/notice.
         if format == .mobileconfig, let data = source.data(using: .utf8) {
-            if var html = renderMobileconfig(data, dark: darkMode) {
-                if truncated {
-                    let notice = truncationNotice(source: source, shown: text, darkMode: darkMode)
-                    html = insertHTMLFragmentBeforeBodyClose(notice, in: html)
-                }
+            if let html = renderMobileconfig(data, dark: darkMode) {
                 return html
             }
         }
@@ -86,52 +42,30 @@ enum SyntaxHighlighter {
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             isAppleConfigProfile(json)
         {
-            if var html = renderJSONProfile(json, rawJSON: source, dark: darkMode) {
-                if truncated { html += truncationNotice(source: source, shown: text, darkMode: darkMode) }
+            if let html = renderJSONProfile(json, rawJSON: source, dark: darkMode) {
                 return html
             }
         }
 
-        var body: String
+        let body: String
         switch format {
-        case .json: body = renderTokens(tokenizeJSON(text))
-        case .yaml: body = renderTokens(tokenizeYAML(text))
-        case .toml: body = renderTokens(tokenizeTOML(text))
-        case .xml, .mobileconfig: body = renderTokens(tokenizeXML(text))
-        case .shell: body = renderTokens(tokenizeShell(text))
-        case .powershell: body = renderTokens(tokenizePowerShell(text))
-        case .python: body = renderTokens(tokenizePython(text))
-        case .ruby: body = renderTokens(tokenizeRuby(text))
-        case .go: body = renderTokens(tokenizeGo(text))
-        case .rust: body = renderTokens(tokenizeRust(text))
-        case .javascript: body = renderTokens(tokenizeJavaScript(text))
-        case .markdown: body = renderMarkdown(text, dark: darkMode)
-        case .hcl: body = renderTokens(tokenizeHCL(text))
-        case .log: body = renderTokens(tokenizeLog(text))
+        case .json: body = renderTokens(tokenizeJSON(source))
+        case .yaml: body = renderTokens(tokenizeYAML(source))
+        case .toml: body = renderTokens(tokenizeTOML(source))
+        case .xml, .mobileconfig: body = renderTokens(tokenizeXML(source))
+        case .shell: body = renderTokens(tokenizeShell(source))
+        case .powershell: body = renderTokens(tokenizePowerShell(source))
+        case .python: body = renderTokens(tokenizePython(source))
+        case .ruby: body = renderTokens(tokenizeRuby(source))
+        case .go: body = renderTokens(tokenizeGo(source))
+        case .rust: body = renderTokens(tokenizeRust(source))
+        case .javascript: body = renderTokens(tokenizeJavaScript(source))
+        case .markdown: return renderMarkdown(source, dark: darkMode)
+        case .hcl: body = renderTokens(tokenizeHCL(source))
+        case .log: body = renderLogHTML(source)
         }
 
-        if truncated {
-            let notice = truncationNotice(source: source, shown: text, darkMode: darkMode)
-            if format == .markdown {
-                body = insertHTMLFragmentBeforeBodyClose(notice, in: body)
-            } else {
-                body += notice
-            }
-        }
-
-        if format == .markdown {
-            return body  // renderMarkdown already wraps in full HTML
-        }
         return wrapHTML(body, dark: darkMode)
-    }
-
-    private static func insertHTMLFragmentBeforeBodyClose(_ fragment: String, in html: String) -> String {
-        if let bodyCloseRange = html.range(of: "</body>", options: .caseInsensitive) {
-            var updatedHTML = html
-            updatedHTML.insert(contentsOf: fragment, at: bodyCloseRange.lowerBound)
-            return updatedHTML
-        }
-        return html + fragment
     }
 
     // MARK: - Mobileconfig Renderer
@@ -812,6 +746,19 @@ enum SyntaxHighlighter {
         .logInfo   { color: \(t.scopeUser); }
         .logDebug  { color: \(t.muted); font-style: italic; }
         .logTimestamp { color: \(t.muted); font-style: italic; }
+        .logErrorMuted { color: \(t.boolNo); opacity: 0.6; }
+        .logWarnMuted  { color: \(t.scopeDevice); opacity: 0.6; }
+        .logInfoMuted  { color: \(t.scopeUser); opacity: 0.6; }
+        .logDebugMuted { color: \(t.muted); opacity: 0.6; font-style: italic; }
+        .lt { color: \(t.muted); font-style: italic; }
+        .le { color: \(t.boolNo); font-weight: bold; }
+        .lw { color: \(t.scopeDevice); }
+        .li { color: \(t.scopeUser); }
+        .ld { color: \(t.muted); font-style: italic; }
+        .ln { color: \(t.xmlNumber); }
+        .lk { color: \(t.xmlBool); }
+        .ls { color: \(t.xmlString); }
+        .lv { color: \(t.xmlTag); }
         </style>
         </head>
         <body>\(body)</body>
@@ -1175,7 +1122,8 @@ enum SyntaxHighlighter {
     // MARK: - Log Tokenizer (heuristic, line-by-line for performance)
 
     private static func tokenizeLog(_ src: String) -> [Token] {
-        // Compile regex once per call — still far cheaper than per-line or per-match.
+        // Thin wrapper for tests that inspect Token output.
+        // The live rendering path uses renderLogHTML() directly.
         let regex = try! Regex(
             #"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})"#  // 1: syslog timestamp
                 + #"|(\d{4}[-/]\d{2}[-/]\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)"#  // 2: ISO/common timestamp
@@ -1237,6 +1185,214 @@ enum SyntaxHighlighter {
             tokens.append(contentsOf: tokenize(lineStr, regex: regex, handler: handler))
         }
         return tokens
+    }
+
+    // MARK: - Fast Log Renderer (NSRegularExpression, direct HTML)
+
+    /// Renders log files as syntax-highlighted HTML.
+    /// For files ≤ 1 MB, uses full per-token highlighting (all 9 token types).
+    /// For larger files, drops bare numbers and file paths (the two noisiest,
+    /// least useful token types) to cut DOM elements by ~40%.
+    private static func renderLogHTML(_ src: String) -> String {
+        if src.utf8.count <= 1_048_576 {
+            return renderLogHTMLFull(src)
+        }
+        return renderLogHTMLFast(src)
+    }
+
+    /// Reduced-token log highlighting for large files.
+    /// Uses the same single-pass NSRegularExpression approach as the full path
+    /// but with a smaller regex that omits bare numbers and file paths,
+    /// cutting total `<span>` elements by ~40%.
+    private static func renderLogHTMLFast(_ src: String) -> String {
+        // Same regex as full path minus groups for file paths and bare numbers
+        let pattern =
+            #"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})"#
+            + #"|(\d{4}[-/]\d{2}[-/]\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)"#
+            + #"|(\[\d{2}/\w{3}/\d{4}[:\d ]+[+-]?\d{0,4}\])"#
+            + #"|\b((?:EMERG(?:ENCY)?|FATAL|CRIT(?:ICAL)?|ALERT):?)"#
+            + #"|\b((?:ERR(?:OR)?):?)"#
+            + #"|\b((?:WARN(?:ING)?):?)"#
+            + #"|\b((?:NOTICE|INFO):?)"#
+            + #"|\b((?:DEBUG|TRACE|VERBOSE):?)"#
+            + #"|(\d{1,3}(?:\.\d{1,3}){3})"#
+            + #"|\b(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b"#
+            + #"|\b([1-5]\d{2})\b"#
+            + #"|("(?:[^"\\]|\\.)*")"#
+
+        let nsRegex = try! NSRegularExpression(pattern: pattern)
+        let nsStr = src as NSString
+        let totalLen = nsStr.length
+
+        let spanOpen: [[UInt8]] = [
+            Array(#"<span class="lt">"#.utf8),   // 0: groups 1,2,3 — timestamp
+            Array(#"<span class="le">"#.utf8),   // 1: groups 4,5   — error
+            Array(#"<span class="lw">"#.utf8),   // 2: group 6      — warn
+            Array(#"<span class="li">"#.utf8),   // 3: group 7      — info
+            Array(#"<span class="ld">"#.utf8),   // 4: group 8      — debug
+            Array(#"<span class="ln">"#.utf8),   // 5: group 9      — IP
+            Array(#"<span class="lk">"#.utf8),   // 6: group 10     — HTTP method
+            Array(#"<span class="ls">"#.utf8),   // 7: group 12     — string
+        ]
+        let spanClose: [UInt8] = Array("</span>".utf8)
+
+        let groupToSpan: [Int: Int] = [
+            1: 0, 2: 0, 3: 0, 4: 1, 5: 1, 6: 2, 7: 3, 8: 4,
+            9: 5, 10: 6, 12: 7,
+        ]
+
+        var html: [UInt8] = []
+        html.reserveCapacity(src.utf8.count + src.utf8.count / 2)
+
+        func appendEscaped(from loc: Int, length len: Int) {
+            guard len > 0 else { return }
+            let sub = nsStr.substring(with: NSRange(location: loc, length: len))
+            for byte in sub.utf8 {
+                switch byte {
+                case 0x26: html.append(contentsOf: [0x26, 0x61, 0x6D, 0x70, 0x3B])
+                case 0x3C: html.append(contentsOf: [0x26, 0x6C, 0x74, 0x3B])
+                case 0x3E: html.append(contentsOf: [0x26, 0x67, 0x74, 0x3B])
+                case 0x22: html.append(contentsOf: [0x26, 0x71, 0x75, 0x6F, 0x74, 0x3B])
+                default: html.append(byte)
+                }
+            }
+        }
+
+        let allMatches = nsRegex.matches(in: src, range: NSRange(location: 0, length: totalLen))
+        var cursor = 0
+        for m in allMatches {
+            let matchRange = m.range
+            if matchRange.location > cursor {
+                appendEscaped(from: cursor, length: matchRange.location - cursor)
+            }
+
+            var spanIdx: Int? = nil
+            for (gi, si) in groupToSpan {
+                if m.range(at: gi).location != NSNotFound {
+                    spanIdx = si
+                    break
+                }
+            }
+            // HTTP status codes (group 11)
+            if spanIdx == nil && m.range(at: 11).location != NSNotFound {
+                let statusRange = m.range(at: 11)
+                let d0 = nsStr.character(at: statusRange.location) - 0x30
+                spanIdx = d0 >= 5 ? 1 : d0 >= 4 ? 2 : d0 >= 3 ? 4 : 5
+            }
+
+            if let si = spanIdx {
+                html.append(contentsOf: spanOpen[si])
+                appendEscaped(from: matchRange.location, length: matchRange.length)
+                html.append(contentsOf: spanClose)
+            } else {
+                appendEscaped(from: matchRange.location, length: matchRange.length)
+            }
+
+            cursor = matchRange.location + matchRange.length
+        }
+
+        if cursor < totalLen {
+            appendEscaped(from: cursor, length: totalLen - cursor)
+        }
+
+        return String(bytes: html, encoding: .utf8) ?? ""
+    }
+
+    /// Full per-token log highlighting for files ≤ 1 MB.
+    private static func renderLogHTMLFull(_ src: String) -> String {
+        let pattern =
+            #"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})"#
+            + #"|(\d{4}[-/]\d{2}[-/]\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)"#
+            + #"|(\[\d{2}/\w{3}/\d{4}[:\d ]+[+-]?\d{0,4}\])"#
+            + #"|\b((?:EMERG(?:ENCY)?|FATAL|CRIT(?:ICAL)?|ALERT):?)"#
+            + #"|\b((?:ERR(?:OR)?):?)"#
+            + #"|\b((?:WARN(?:ING)?):?)"#
+            + #"|\b((?:NOTICE|INFO):?)"#
+            + #"|\b((?:DEBUG|TRACE|VERBOSE):?)"#
+            + #"|(\d{1,3}(?:\.\d{1,3}){3})"#
+            + #"|\b(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b"#
+            + #"|\b([1-5]\d{2})\b"#
+            + #"|("(?:[^"\\]|\\.)*")"#
+            + #"|(/[\w./-]+)"#
+            + #"|\b(\d+(?:\.\d+)?(?:%|ms|[smhd]|[KMGT]i?[Bb])?)\b"#
+
+        let nsRegex = try! NSRegularExpression(pattern: pattern)
+        let nsStr = src as NSString
+        let totalLen = nsStr.length
+
+        // Pre-built UTF-8 byte sequences for span tags (short class names for size)
+        let spanOpen: [[UInt8]] = [
+            Array(#"<span class="lt">"#.utf8),   // 0: groups 1,2,3 — timestamp
+            Array(#"<span class="le">"#.utf8),   // 1: groups 4,5   — error
+            Array(#"<span class="lw">"#.utf8),   // 2: group 6      — warn
+            Array(#"<span class="li">"#.utf8),   // 3: group 7      — info
+            Array(#"<span class="ld">"#.utf8),   // 4: group 8      — debug
+            Array(#"<span class="ln">"#.utf8),   // 5: groups 9,14  — number/IP
+            Array(#"<span class="lk">"#.utf8),   // 6: group 10     — HTTP method
+            Array(#"<span class="ls">"#.utf8),   // 7: group 12     — string
+            Array(#"<span class="lv">"#.utf8),   // 8: group 13     — path
+        ]
+        let spanClose: [UInt8] = Array("</span>".utf8)
+
+        let groupToSpan: [Int: Int] = [
+            1: 0, 2: 0, 3: 0, 4: 1, 5: 1, 6: 2, 7: 3, 8: 4,
+            9: 5, 10: 6, 12: 7, 13: 8, 14: 5,
+        ]
+
+        var html: [UInt8] = []
+        html.reserveCapacity(src.utf8.count * 2)
+
+        func appendEscaped(from loc: Int, length len: Int) {
+            guard len > 0 else { return }
+            let sub = nsStr.substring(with: NSRange(location: loc, length: len))
+            for byte in sub.utf8 {
+                switch byte {
+                case 0x26: html.append(contentsOf: [0x26, 0x61, 0x6D, 0x70, 0x3B])
+                case 0x3C: html.append(contentsOf: [0x26, 0x6C, 0x74, 0x3B])
+                case 0x3E: html.append(contentsOf: [0x26, 0x67, 0x74, 0x3B])
+                case 0x22: html.append(contentsOf: [0x26, 0x71, 0x75, 0x6F, 0x74, 0x3B])
+                default: html.append(byte)
+                }
+            }
+        }
+
+        let allMatches = nsRegex.matches(in: src, range: NSRange(location: 0, length: totalLen))
+        var cursor = 0
+        for m in allMatches {
+            let matchRange = m.range
+            if matchRange.location > cursor {
+                appendEscaped(from: cursor, length: matchRange.location - cursor)
+            }
+
+            var spanIdx: Int? = nil
+            for (gi, si) in groupToSpan {
+                if m.range(at: gi).location != NSNotFound {
+                    spanIdx = si
+                    break
+                }
+            }
+            if spanIdx == nil && m.range(at: 11).location != NSNotFound {
+                let statusRange = m.range(at: 11)
+                let d0 = nsStr.character(at: statusRange.location) - 0x30
+                spanIdx = d0 >= 5 ? 1 : d0 >= 4 ? 2 : d0 >= 3 ? 4 : 5
+            }
+
+            if let si = spanIdx {
+                html.append(contentsOf: spanOpen[si])
+                appendEscaped(from: matchRange.location, length: matchRange.length)
+                html.append(contentsOf: spanClose)
+            } else {
+                appendEscaped(from: matchRange.location, length: matchRange.length)
+            }
+
+            cursor = matchRange.location + matchRange.length
+        }
+
+        if cursor < totalLen {
+            appendEscaped(from: cursor, length: totalLen - cursor)
+        }
+
+        return String(bytes: html, encoding: .utf8) ?? ""
     }
 
     // MARK: - Markdown Renderer
@@ -1594,18 +1750,34 @@ enum SyntaxHighlighter {
     }
 
     static func escapeHTML(_ text: String) -> String {
-        var result = ""
-        result.reserveCapacity(text.utf8.count + text.utf8.count / 8)
-        for ch in text {
-            switch ch {
-            case "&": result += "&amp;"
-            case "<": result += "&lt;"
-            case ">": result += "&gt;"
-            case "\"": result += "&quot;"
-            default: result.append(ch)
+        // Work at UTF-8 byte level — the four characters we escape (&<>") are all
+        // single-byte ASCII, so we can scan bytes and copy runs of safe bytes in bulk.
+        var utf8 = Array(text.utf8)
+        var result: [UInt8] = []
+        result.reserveCapacity(utf8.count + utf8.count / 8)
+        var runStart = 0
+        for i in 0..<utf8.count {
+            let byte = utf8[i]
+            if byte == 0x26 || byte == 0x3C || byte == 0x3E || byte == 0x22 { // & < > "
+                // Flush preceding safe run
+                if i > runStart {
+                    result.append(contentsOf: utf8[runStart..<i])
+                }
+                switch byte {
+                case 0x26: result.append(contentsOf: [0x26, 0x61, 0x6D, 0x70, 0x3B]) // &amp;
+                case 0x3C: result.append(contentsOf: [0x26, 0x6C, 0x74, 0x3B])       // &lt;
+                case 0x3E: result.append(contentsOf: [0x26, 0x67, 0x74, 0x3B])       // &gt;
+                case 0x22: result.append(contentsOf: [0x26, 0x71, 0x75, 0x6F, 0x74, 0x3B]) // &quot;
+                default: break
+                }
+                runStart = i + 1
             }
         }
-        return result
+        // Flush remaining safe run
+        if runStart < utf8.count {
+            result.append(contentsOf: utf8[runStart...])
+        }
+        return String(bytes: result, encoding: .utf8) ?? text
     }
 
     private static func wrapHTML(_ body: String, dark: Bool) -> String {
@@ -1633,6 +1805,19 @@ enum SyntaxHighlighter {
                 .logInfo   { color: #0a84ff; }
                 .logDebug  { color: #636366; font-style: italic; }
                 .logTimestamp { color: #636366; font-style: italic; }
+                .logErrorMuted { color: #ff6961; opacity: 0.7; }
+                .logWarnMuted  { color: #ffb347; opacity: 0.7; }
+                .logInfoMuted  { color: #6eb5ff; opacity: 0.7; }
+                .logDebugMuted { color: #636366; opacity: 0.7; font-style: italic; }
+                .lt { color: #636366; font-style: italic; }
+                .le { color: #ff453a; font-weight: bold; }
+                .lw { color: #ff9f0a; }
+                .li { color: #0a84ff; }
+                .ld { color: #636366; font-style: italic; }
+                .ln { color: #b5cea8; }
+                .lk { color: #c586c0; }
+                .ls { color: #ce9178; }
+                .lv { color: #d19a66; }
                 """
         } else {
             colors = """
@@ -1655,6 +1840,19 @@ enum SyntaxHighlighter {
                 .logInfo   { color: #2563eb; }
                 .logDebug  { color: #94a3b8; font-style: italic; }
                 .logTimestamp { color: #94a3b8; font-style: italic; }
+                .logErrorMuted { color: #ef4444; opacity: 0.6; }
+                .logWarnMuted  { color: #f97316; opacity: 0.6; }
+                .logInfoMuted  { color: #60a5fa; opacity: 0.6; }
+                .logDebugMuted { color: #94a3b8; opacity: 0.6; font-style: italic; }
+                .lt { color: #94a3b8; font-style: italic; }
+                .le { color: #dc2626; font-weight: bold; }
+                .lw { color: #ea580c; }
+                .li { color: #2563eb; }
+                .ld { color: #94a3b8; font-style: italic; }
+                .ln { color: #098658; }
+                .lk { color: #af00db; }
+                .ls { color: #a31515; }
+                .lv { color: #e06c20; }
                 """
         }
         return """
