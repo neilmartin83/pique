@@ -1204,11 +1204,11 @@ enum SyntaxHighlighter {
             #"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})"#  // 1: syslog timestamp
                 + #"|(\d{4}[-/]\d{2}[-/]\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)"#  // 2: ISO/common timestamp
                 + #"|(\[\d{2}/\w{3}/\d{4}[:\d ]+[+-]?\d{0,4}\])"#  // 3: Apache CLF timestamp
-                + #"|\b((?:EMERG(?:ENCY)?|FATAL|CRIT(?:ICAL)?|ALERT):?)"#  // 4: critical severity
-                + #"|\b((?:ERR(?:OR)?):?)"#  // 5: error severity
-                + #"|\b((?:WARN(?:ING)?):?)"#  // 6: warning severity
-                + #"|\b((?:NOTICE|INFO):?)"#  // 7: info/notice severity
-                + #"|\b((?:DEBUG|TRACE|VERBOSE):?)"#  // 8: debug severity
+                + #"|\b((?:EMERG(?:ENCY)?|FATAL|CRIT(?:ICAL)?|ALERT)(?::|\b))"#  // 4: critical severity
+                + #"|\b((?:ERR(?:OR)?)(?::|\b))"#  // 5: error severity
+                + #"|\b((?:WARN(?:ING)?)(?::|\b))"#  // 6: warning severity
+                + #"|\b((?:NOTICE|INFO)(?::|\b))"#  // 7: info/notice severity
+                + #"|\b((?:DEBUG|TRACE|VERBOSE)(?::|\b))"#  // 8: debug severity
                 + #"|(\d{1,3}(?:\.\d{1,3}){3})"#  // 9: IPv4 address
                 + #"|\b(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b"#  // 10: HTTP method
                 + #"|\b([1-5]\d{2})\b"#  // 11: HTTP status code
